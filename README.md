@@ -22,11 +22,11 @@ covers Node.js and Bun.
 Run it directly:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/aymenkmar/node2shell-check/main/node2shell-check.sh | sudo sh
+curl -fsSL https://raw.githubusercontent.com/aymenkmar/node2shell-check/master/node2shell-check.sh | sudo sh
 ```
 
 ```sh
-wget -qO- https://raw.githubusercontent.com/aymenkmar/node2shell-check/main/node2shell-check.sh | sudo sh -s -- --deep
+wget -qO- https://raw.githubusercontent.com/aymenkmar/node2shell-check/master/node2shell-check.sh | sudo sh -s -- --deep
 ```
 
 Prefer to review before running, or pin a specific commit:
@@ -68,7 +68,7 @@ Loop over hosts over SSH and grep that line:
 ```sh
 for h in $(cat hosts.txt); do
   printf '%s: ' "$h"
-  ssh "$h" 'curl -fsSL https://raw.githubusercontent.com/aymenkmar/node2shell-check/main/node2shell-check.sh | sudo sh' | grep '^RESULT'
+  ssh "$h" 'curl -fsSL https://raw.githubusercontent.com/aymenkmar/node2shell-check/master/node2shell-check.sh | sudo sh' | grep '^RESULT'
 done
 ```
 
