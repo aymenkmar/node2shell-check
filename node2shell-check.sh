@@ -463,7 +463,7 @@ update_cmd() {
 				return 0
 				;;
 		esac
-		printf 'pick a maintained line for this app (22.23.4, 24.22.1 or 26.12.1), then run the matching install command for your version manager with that exact version - for nvm: nvm install <version> && nvm alias default <version>   # then: nvm uninstall %s' "${_old:-<old-version>}"
+		printf 'pick a maintained line for this app (22.23.4, 24.22.1 or 26.12.1), then run the matching install command for your version manager with that exact version - for nvm: nvm install <version> --reinstall-packages-from=current && nvm use <version> && nvm alias default <version>   # then: nvm uninstall %s' "${_old:-<old-version>}"
 		return 0
 	fi
 
@@ -475,7 +475,7 @@ update_cmd() {
 		snap) printf 'sudo snap refresh %s' "${_pkg:-node}" ;;
 		*)
 			case "$_path" in
-				*/.nvm/versions/node/*) printf 'nvm install %s && nvm alias default %s   # then: nvm uninstall %s' "$_target" "$_target" "${_old:-<old-version>}" ;;
+				*/.nvm/versions/node/*) printf 'nvm install %s --reinstall-packages-from=current && nvm use %s && nvm alias default %s   # then: nvm uninstall %s' "$_target" "$_target" "$_target" "${_old:-<old-version>}" ;;
 				*/.volta/tools/image/node/*) printf 'volta install node@%s' "$_target" ;;
 				*/.fnm/node-versions/*|*/fnm/node-versions/*) printf 'fnm install %s && fnm default %s' "$_target" "$_target" ;;
 				*/.asdf/installs/nodejs/*) printf 'asdf install nodejs %s && asdf global nodejs %s' "$_target" "$_target" ;;
