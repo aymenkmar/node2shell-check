@@ -92,13 +92,23 @@ done
   directory.
 - **Running processes** (Linux): reads `/proc/[pid]/exe` to catch
   interpreters running from paths the static scan didn't enumerate.
+- **Who owns and who runs each install**: every result shows the file's
+  Unix owner, and — on Linux, if that exact binary is an active process —
+  which user it's actually running as. A global/system `node` that's just
+  unused cruft and a per-user nvm install backing a live service look very
+  different in the report, instead of being indistinguishable "found a
+  node binary" lines.
 - **Containers**: runs `node -v`/`bun --version` inside every running
   Docker/Podman container.
 - **Stale workers**: on Linux, flags processes still running a binary an
   upgrade deleted from disk — these need a restart to actually be fixed.
 - **Package-manager backing**: when a binary belongs to dpkg, rpm, apk,
   Homebrew or snap, the report names the package so you can use your
-  normal update flow instead of a manual reinstall.
+  normal update flow instead of a manual reinstall. Every upgrade command
+  pins the exact target version (never `--lts`/`lts/*`) — Node's "latest
+  LTS" tag can move to a new major within days of a security release, so
+  a floating alias can jump you two majors past what your app was tested
+  on instead of just patching it.
 
 ## Safety
 

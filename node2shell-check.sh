@@ -247,10 +247,6 @@ collect_static() {
 collect_processes() {
 	[ -d /proc ] || return 0
 	_self_ns=$(readlink /proc/self/ns/mnt 2>/dev/null)
-	ls -l /proc/[0-9]*/exe 2>/dev/null | sed -n 's#.*/proc/\([0-9]*\)/exe -> ##p' |
-	while IFS= read -r _target; do
-		_pid_line="$_target"
-	done
 	for _exe in /proc/[0-9]*/exe; do
 		[ -e "$_exe" ] || continue
 		_pid=$(printf '%s' "$_exe" | sed -n 's#/proc/\([0-9]*\)/exe#\1#p')
@@ -272,6 +268,15 @@ collect_processes() {
 		_kind=$(runtime_name "$_target")
 		[ -n "$_kind" ] || continue
 		[ "$_kind" = "bun" ] && [ "$SCAN_BUN" != 1 ] && continue
+		# record which user this binary is actually running as, keyed by
+		# its real path, so check_install can report live usage, not just
+		# file ownership (an unused install and the live service binary
+		# are very different things to act on).
+		_ruser=$(ps -o user= -p "$_pid" 2>/dev/null | tr -d ' ')
+		if [ -n "$_ruser" ]; then
+			_rreal=$(resolve "$_target")
+			printf '%s\037%s\037%s\n' "$_rreal" "$_ruser" "$_pid" >>"$TMP/running"
+		fi
 		add_cand "$_kind" "$_target"
 	done
 }
@@ -306,6 +311,11 @@ safe_to_exec() {
 	case "$_grp" in 2|3|6|7) return 1 ;; esac
 	case "$_oth" in 2|3|6|7) return 1 ;; esac
 	return 0
+}
+
+# owner_of FILE -> prints the Unix user that owns the file on disk
+owner_of() {
+	stat -c '%U' "$1" 2>/dev/null || stat -f '%Su' "$1" 2>/dev/null || printf 'unknown'
 }
 
 # file_version FILE KIND -> best-effort version string read from the raw
@@ -437,8 +447,26 @@ assess() {
 	WHY="Node.js $BRANCH.x is end-of-life and will not receive a fix; migrate to a maintained line"
 }
 
+# update_cmd MGR PATH PKG KIND TARGET OLD EOL -> prints the exact command
+# to run. TARGET is always a single pinned version here, never "--lts" or
+# "lts/*" - which version nvm/npm consider "latest LTS" changes over time
+# (a newly-released major can flip to LTS within days of a security
+# release), so a floating alias can silently jump you past the line your
+# app was actually tested on.
 update_cmd() {
-	_mgr="$1"; _path="$2"; _pkg="$3"; _kind="$4"
+	_mgr="$1"; _path="$2"; _pkg="$3"; _kind="$4"; _target="$5"; _old="$6"; _eol="$7"
+
+	if [ "$_eol" = 1 ]; then
+		case "$_mgr" in
+			dpkg|rpm|apk|snap)
+				printf 'the %s package for this end-of-life line will not get a fix upstream; move this install to nvm (or another version manager) and pick a maintained line' "$_mgr"
+				return 0
+				;;
+		esac
+		printf 'pick a maintained line for this app (22.23.4, 24.22.1 or 26.12.1), then run the matching install command for your version manager with that exact version - for nvm: nvm install <version> && nvm alias default <version>   # then: nvm uninstall %s' "${_old:-<old-version>}"
+		return 0
+	fi
+
 	case "$_mgr" in
 		dpkg) printf 'sudo apt-get update && sudo apt-get install --only-upgrade %s' "${_pkg:-nodejs}" ;;
 		rpm) printf 'sudo dnf upgrade %s   # or: sudo yum update %s' "${_pkg:-nodejs}" "${_pkg:-nodejs}" ;;
@@ -447,14 +475,14 @@ update_cmd() {
 		snap) printf 'sudo snap refresh %s' "${_pkg:-node}" ;;
 		*)
 			case "$_path" in
-				*/.nvm/versions/node/*) printf 'nvm install --lts && nvm alias default "lts/*"   # then: nvm uninstall <old-version>' ;;
-				*/.volta/tools/image/node/*) printf 'volta install node@%s' "$TARGET" ;;
-				*/.fnm/node-versions/*|*/fnm/node-versions/*) printf 'fnm install %s && fnm default %s' "$TARGET" "$TARGET" ;;
-				*/.asdf/installs/nodejs/*) printf 'asdf install nodejs %s && asdf global nodejs %s' "$TARGET" "$TARGET" ;;
-				*/.nodenv/versions/*) printf 'nodenv install %s && nodenv global %s' "$TARGET" "$TARGET" ;;
-				*/n/versions/node/*) printf 'sudo n %s' "$TARGET" ;;
+				*/.nvm/versions/node/*) printf 'nvm install %s && nvm alias default %s   # then: nvm uninstall %s' "$_target" "$_target" "${_old:-<old-version>}" ;;
+				*/.volta/tools/image/node/*) printf 'volta install node@%s' "$_target" ;;
+				*/.fnm/node-versions/*|*/fnm/node-versions/*) printf 'fnm install %s && fnm default %s' "$_target" "$_target" ;;
+				*/.asdf/installs/nodejs/*) printf 'asdf install nodejs %s && asdf global nodejs %s' "$_target" "$_target" ;;
+				*/.nodenv/versions/*) printf 'nodenv install %s && nodenv global %s' "$_target" "$_target" ;;
+				*/n/versions/node/*) printf 'sudo n %s' "$_target" ;;
 				*/.bun/bin/*) printf 'bun upgrade   # or: curl -fsSL https://bun.sh/install | bash' ;;
-				*) printf 'reinstall/rebuild the %s binary from a release >= %s' "$_kind" "$TARGET" ;;
+				*) printf 'reinstall/rebuild the %s binary from a release >= %s' "$_kind" "$_target" ;;
 			esac
 			;;
 	esac
@@ -490,22 +518,36 @@ record() {
 check_install() {
 	_kind="$1"; _path="$2"; _orig="$3"
 	read_version "$_kind" "$_path"
+	_old_v="$V_FULL"
 	assess "$_kind" "$V_FULL"
 	pkg_owner "$_path"
 
 	_detail=""
 	if [ "$ST" = "VULNERABLE" ]; then
 		if [ "$EOL" = 1 ]; then
-			_fix="EOL - no patch available; migrate to $TARGET"
+			_fix="EOL - no patch available; migrate to $TARGET: $(update_cmd "$PKG_MGR" "$_path" "$PKG_NAME" "$_kind" "$TARGET" "$_old_v" 1)"
 		else
-			_fix="upgrade to $TARGET: $(update_cmd "$PKG_MGR" "$_path" "$PKG_NAME" "$_kind")"
+			_fix="upgrade to $TARGET: $(update_cmd "$PKG_MGR" "$_path" "$PKG_NAME" "$_kind" "$TARGET" "$_old_v" 0)"
 		fi
 		_detail="$_fix"
 	elif [ "$ST" = "UNKNOWN" ]; then
 		_detail="$WHY"
 	fi
 
-	_label="$_kind ${V_FULL:-unknown} at $_path"
+	_file_owner=$(owner_of "$_path")
+	_run_as=""
+	if [ -s "$TMP/running" ]; then
+		_run_as=$(awk -F'\037' -v p="$_path" '$1==p{print $2}' "$TMP/running" | sort -u | tr '\n' ',' | sed 's/,$//')
+	fi
+	if [ -n "$_run_as" ]; then
+		_who="owner: $_file_owner, running as: $_run_as"
+	elif [ -d /proc ]; then
+		_who="owner: $_file_owner, not currently running"
+	else
+		_who="owner: $_file_owner, running state unknown - process scan needs /proc (Linux)"
+	fi
+
+	_label="$_kind ${V_FULL:-unknown} at $_path ($_who)"
 	[ "$_path" != "$_orig" ] && _label="$_label (via $_orig)"
 
 	count "$ST"
@@ -597,6 +639,7 @@ main() {
 	: >"$TMP/cands"
 	: >"$TMP/stale"
 	: >"$TMP/results"
+	: >"$TMP/running"
 
 	if [ "$(id -u 2>/dev/null)" = "0" ]; then IS_ROOT=1; else IS_ROOT=0; fi
 	detect_os
